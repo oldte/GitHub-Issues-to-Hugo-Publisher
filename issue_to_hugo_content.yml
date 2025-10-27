@@ -1,0 +1,117 @@
+name: Sync Issues to Hugo Content
+
+on:
+  issues:
+    types: [opened]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: "issues-to-hugo"
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  convert_issues:
+    name: Convert GitHub Issues
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'issues' && contains(github.event.issue.labels.*.name, '发布') && github.actor != 'IssueBot'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          clean: true
+          
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: |
+          pip install requests PyGithub==2.4.0 beautifulsoup4
+
+      - name: Create content/posts directory
+        run: |
+          mkdir -p content/posts
+          echo "Created content/posts directory"
+
+      - name: Convert issues to Hugo content
+        id: convert
+        env:
+          GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}
+        run: |
+          find content/posts -type f 2>/dev/null | sort > /tmp/original_files.txt || touch /tmp/original_files.txt
+          if [ -s /tmp/original_files.txt ]; then
+            xargs sha1sum < /tmp/original_files.txt > /tmp/original_hashes.txt
+          else
+            touch /tmp/original_hashes.txt
+          fi
+          
+          python .github/workflows/issue_to_hugo.py \
+            --repo "${{ github.repository }}" \
+            --output "content/posts" \
+            --debug
+          
+          find content/posts -type f 2>/dev/null | sort > /tmp/new_files.txt || touch /tmp/new_files.txt
+          if [ -s /tmp/new_files.txt ]; then
+            xargs sha1sum < /tmp/new_files.txt > /tmp/new_hashes.txt
+          else
+            touch /tmp/new_hashes.txt
+          fi
+          
+          if cmp -s /tmp/original_hashes.txt /tmp/new_hashes.txt; then
+            echo "needs_build=false" >> $GITHUB_OUTPUT
+            echo "🔄 没有内容变更，将跳过提交"
+          else
+            echo "needs_build=true" >> $GITHUB_OUTPUT
+            echo "✅ 检测到内容变更，将执行提交"
+          fi
+          
+      - name: Commit changes (if any)
+        if: steps.convert.outputs.needs_build == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}
+        run: |
+          git config --global user.name "IssueBot"
+          git config --global user.email "actions@users.noreply.github.com"
+          git remote set-url origin https://x-access-token:${{ secrets.PAT_TOKEN }}@github.com/${{ github.repository }}.git
+          
+          if [ -n "${{ github.base_ref }}" ]; then
+            DEFAULT_BRANCH="${{ github.base_ref }}"
+          else
+            DEFAULT_BRANCH=$(git remote show origin | grep 'HEAD branch' | cut -d' ' -f5)
+          fi
+          
+          if [ -z "$DEFAULT_BRANCH" ]; then
+            DEFAULT_BRANCH="master"
+          fi
+          
+          git checkout $DEFAULT_BRANCH
+          
+          git add content/posts
+          
+          if ! git diff-index --quiet HEAD --; then
+            git commit -m "Automated: Sync GitHub Issues as content"
+            echo "正在推送变更到分支: $DEFAULT_BRANCH"
+            git push origin $DEFAULT_BRANCH
+          else
+            echo "没有需要提交的变更"
+          fi
+
+      - name: Trigger Hugo build
+        if: steps.convert.outputs.needs_build == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}
+        run: |
+          curl -X POST \
+            -H "Accept: application/vnd.github.v3+json" \
+            -H "Authorization: Bearer ${{ secrets.PAT_TOKEN }}" \
+            https://api.github.com/repos/${{ github.repository }}/dispatches \
+            -d '{"event_type": "trigger-hugo-build"}'
