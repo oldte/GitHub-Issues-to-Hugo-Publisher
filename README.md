@@ -2,6 +2,8 @@
 
 将GitHub Issues自动转换为Hugo内容文件的GitHub Action解决方案，无需本地环境。
 
+![示例](sample.jpg）
+
 ## 🚀 快速开始
 
 ### 1. 添加文件到您的Hugo仓库
@@ -111,7 +113,8 @@ $旅行$ $摄影$ $2024$
 ## 文件路径说明
 
 ### 必需的文件结构
-```
+
+```markdown
 your-hugo-repo/
 ├── .github/
 │   └── workflows/
@@ -153,3 +156,5 @@ jobs:
           github_token: ${{ secrets.PAT_TOKEN }}
           publish_dir: ./public
 ```
+
+如有其他问题，可查看原文：[如何使用 GitHub Issue 发布 Hugo 博客](https://lawtee.com/article/publish-hugo-by-github-issue/)
