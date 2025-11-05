@@ -2,7 +2,7 @@
 
 将GitHub Issues自动转换为Hugo内容文件的GitHub Action解决方案，无需本地环境。
 
-![示例](sample.jpg）
+![示例](https://raw.githubusercontent.com/oldte/GitHub-Issues-to-Hugo-Publisher/refs/heads/main/sample.jpg)
 
 ## 🚀 快速开始
 
