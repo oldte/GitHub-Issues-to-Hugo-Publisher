@@ -1,4 +1,4 @@
-name: Sync Issues to Hugo Content
+name: GitHub Issues to Hugo Publisher
 
 on:
   issues:
@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: write  # 允许写入内容
 
 concurrency:
   group: "issues-to-hugo"
@@ -18,35 +18,42 @@ defaults:
 
 jobs:
   convert_issues:
-    name: Convert GitHub Issues
+    name: 转换Issues为Hugo内容
     runs-on: ubuntu-latest
-    if: github.event_name == 'workflow_dispatch' || github.event_name == 'issues' && contains(github.event.issue.labels.*.name, '发布') && github.actor != 'IssueBot'
+    # 触发条件：手动触发或带"发布"标签的新Issue
+    if: |
+      github.event_name == 'workflow_dispatch' || 
+      (github.event_name == 'issues' && 
+       contains(github.event.issue.labels.*.name, '发布') && 
+       github.actor != 'actions-user')
+    
     steps:
-      - name: Checkout repository
+      - name: 检出仓库
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
           clean: true
           
-      - name: Setup Python
+      - name: 设置Python环境
         uses: actions/setup-python@v4
         with:
           python-version: '3.11'
       
-      - name: Install dependencies
+      - name: 安装依赖
         run: |
-          pip install requests PyGithub==2.4.0 beautifulsoup4
+          pip install requests PyGithub beautifulsoup4
 
-      - name: Create content/posts directory
+      - name: 创建内容目录
         run: |
           mkdir -p content/posts
-          echo "Created content/posts directory"
+          echo "目录已创建"
 
-      - name: Convert issues to Hugo content
+      - name: 转换Issues
         id: convert
         env:
-          GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}  # 使用PAT_TOKEN认证
         run: |
+          # 记录原始文件状态
           find content/posts -type f 2>/dev/null | sort > /tmp/original_files.txt || touch /tmp/original_files.txt
           if [ -s /tmp/original_files.txt ]; then
             xargs sha1sum < /tmp/original_files.txt > /tmp/original_hashes.txt
@@ -54,11 +61,13 @@ jobs:
             touch /tmp/original_hashes.txt
           fi
           
-          python .github/workflows/issue_to_hugo.py \
+          # 执行转换脚本
+          python scripts/issue_to_hugo.py \
             --repo "${{ github.repository }}" \
             --output "content/posts" \
             --debug
           
+          # 记录转换后文件状态
           find content/posts -type f 2>/dev/null | sort > /tmp/new_files.txt || touch /tmp/new_files.txt
           if [ -s /tmp/new_files.txt ]; then
             xargs sha1sum < /tmp/new_files.txt > /tmp/new_hashes.txt
@@ -66,52 +75,55 @@ jobs:
             touch /tmp/new_hashes.txt
           fi
           
+          # 检查文件是否变化
           if cmp -s /tmp/original_hashes.txt /tmp/new_hashes.txt; then
             echo "needs_build=false" >> $GITHUB_OUTPUT
-            echo "🔄 没有内容变更，将跳过提交"
+            echo "✅ 无内容变更"
           else
             echo "needs_build=true" >> $GITHUB_OUTPUT
-            echo "✅ 检测到内容变更，将执行提交"
+            echo "🔄 检测到内容变更"
           fi
           
-      - name: Commit changes (if any)
+      - name: 提交变更
         if: steps.convert.outputs.needs_build == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}
         run: |
-          git config --global user.name "IssueBot"
+          git config --global user.name "Hugo Publisher"
           git config --global user.email "actions@users.noreply.github.com"
+          
+          # 设置远程仓库URL
           git remote set-url origin https://x-access-token:${{ secrets.PAT_TOKEN }}@github.com/${{ github.repository }}.git
           
+          # 确定默认分支
           if [ -n "${{ github.base_ref }}" ]; then
             DEFAULT_BRANCH="${{ github.base_ref }}"
           else
             DEFAULT_BRANCH=$(git remote show origin | grep 'HEAD branch' | cut -d' ' -f5)
           fi
           
-          if [ -z "$DEFAULT_BRANCH" ]; then
-            DEFAULT_BRANCH="master"
-          fi
-          
+          # 回退到默认分支
           git checkout $DEFAULT_BRANCH
           
+          # 添加并提交变更
           git add content/posts
           
           if ! git diff-index --quiet HEAD --; then
-            git commit -m "Automated: Sync GitHub Issues as content"
-            echo "正在推送变更到分支: $DEFAULT_BRANCH"
+            git commit -m "自动更新: 从Issues生成Hugo内容"
+            echo "推送变更到 $DEFAULT_BRANCH"
             git push origin $DEFAULT_BRANCH
           else
-            echo "没有需要提交的变更"
+            echo "无变更可提交"
           fi
 
-      - name: Trigger Hugo build
+      - name: 触发Hugo构建
         if: steps.convert.outputs.needs_build == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}
         run: |
+          # 调用仓库分发事件
           curl -X POST \
             -H "Accept: application/vnd.github.v3+json" \
             -H "Authorization: Bearer ${{ secrets.PAT_TOKEN }}" \
             https://api.github.com/repos/${{ github.repository }}/dispatches \
-            -d '{"event_type": "trigger-hugo-build"}'
+            -d '{"event_type": "hugo-build-trigger"}'
